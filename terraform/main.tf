@@ -7,8 +7,8 @@ resource "google_storage_bucket" "append_website" {
   }
   enable_object_retention     = false
   force_destroy               = true
-  uniform_bucket_level_access = true
-  public_access_prevention    = "enforced"
+  uniform_bucket_level_access = false
+  public_access_prevention    = "inherited"
   requester_pays              = false
   website {
     main_page_suffix = "index.html"
@@ -17,11 +17,25 @@ resource "google_storage_bucket" "append_website" {
   location = var.region
 }
 
+# Registering a domain
+resource "google_dns_managed_zone" "domain" {
+  name        = "domain"
+  dns_name    = "${var.domain}."
+  visibility    = "public"
+  cloud_logging_config {
+    enable_logging = false
+  }
+  dnssec_config {
+    state = "off"
+  }
+  description = "append-zone"  
+}
+
 # Upload website files to cloud storage bucket 
 resource "google_storage_bucket_object" "append_obj" {
   for_each = fileset("../Append/", "**")
   name     = each.value
-  source   = each.key
+  source   = "../Append/${each.value}"
   # source   = "/images/nature/garden-tiger-moth.jpg"
   bucket = google_storage_bucket.append_website.name
 }
@@ -34,61 +48,56 @@ resource "google_storage_default_object_access_control" "append_access_control" 
 }
 
 # Reserve an external IP
-resource "google_compute_global_address" "append_compute_global_address" {
-  name         = "append_compute_global_address"
+resource "google_compute_global_address" "appendcomputeglobaladdress" {
+  name         = "appendcomputeglobaladdress"
   address_type = "EXTERNAL"
-}
-
-# Get the managed DNS zone
-data "google_dns_managed_zone" "append_dns_managed_zone" {
-  name = "append_dns_managed_zone"
 }
 
 # Add the IP to the DNS
 resource "google_dns_record_set" "append_dns_record_set" {
-  name         = "website.${var.domain}"
+  name         = "website.${var.domain}."
   type         = "A"
   ttl          = 300
-  managed_zone = var.domain
-  rrdatas      = [google_compute_global_address.website.address]
+  managed_zone = google_dns_managed_zone.domain.name
+  rrdatas      = [google_compute_global_address.appendcomputeglobaladdress.address]
 }
 
 # Add the bucket as a CDN backend
 resource "google_compute_backend_bucket" "append_website_cdn" {
-  name        = "append_website_cdn"
+  name        = "appendwebsitecdn"
   description = "Contains files needed by the website"
   bucket_name = google_storage_bucket.append_website.name
   enable_cdn  = true
 }
 
 # Create HTTPS certificate
-resource "google_compute_managed_ssl_certificate" "append_cert" {
-  name = "append_cert"
+resource "google_compute_managed_ssl_certificate" "appendcert" {
+  name = "appendcert"
   managed {
     domains = [google_dns_record_set.append_dns_record_set.name]
   }
 }
 
 # GCP URL MAP
-resource "google_compute_url_map" "append_compute_url_map" {
-  name            = "append_compute_url_map"
+resource "google_compute_url_map" "appendcomputeurlmap" {
+  name            = "appendcomputeurlmap"
   default_service = google_compute_backend_bucket.append_website_cdn.self_link
 }
 
 # GCP target proxy
-resource "google_compute_target_https_proxy" "append_target_proxy" {
+resource "google_compute_target_https_proxy" "appendtargetproxy" {
   provider         = google
-  name             = "append_target_proxy"
-  url_map          = google_compute_url_map.append_compute_url_map.self_link
-  ssl_certificates = [google_compute_managed_ssl_certificate.append_cert.self_link]
+  name             = "appendtargetproxy"
+  url_map          = google_compute_url_map.appendcomputeurlmap.self_link
+  ssl_certificates = [google_compute_managed_ssl_certificate.appendcert.self_link]
 }
 
 # GCP forwarding rule
-resource "google_compute_global_forwarding_rule" "append_global_forwarding_rule" {
-  name                  = "append_global_forwarding_rule"
+resource "google_compute_global_forwarding_rule" "appendglobalforwardingrule" {
+  name                  = "appendglobalforwardingrule"
   load_balancing_scheme = "EXTERNAL"
-  ip_address            = google_compute_global_address.append_compute_global_address.address
+  ip_address            = google_compute_global_address.appendcomputeglobaladdress.address
   ip_protocol           = "TCP"
   port_range            = "443"
-  target                = google_compute_target_https_proxy.append_target_proxy.self_link
+  target                = google_compute_target_https_proxy.appendtargetproxy.self_link
 }

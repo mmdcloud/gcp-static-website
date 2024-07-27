@@ -5,5 +5,5 @@ variable "region" {
 
 variable "domain" {
   type    = string
-  default = "madmaxcloud.online"
+  default = "domain_name"
 }
