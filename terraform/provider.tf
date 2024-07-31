@@ -8,6 +8,6 @@ terraform {
 }
 
 provider "google" {
-  project = "custom-ground-424107-q4"
+  project = "master-sector-430909-i0"
   region  = "us-central1"
 }

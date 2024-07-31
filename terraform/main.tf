@@ -19,16 +19,16 @@ resource "google_storage_bucket" "append_website" {
 
 # Registering a domain
 resource "google_dns_managed_zone" "domain" {
-  name        = "domain"
-  dns_name    = "${var.domain}."
-  visibility    = "public"
+  name       = "domain"
+  dns_name   = "${var.domain}."
+  visibility = "public"
   cloud_logging_config {
     enable_logging = false
   }
   dnssec_config {
     state = "off"
   }
-  description = "append-zone"  
+  description = "append-zone"
 }
 
 # Upload website files to cloud storage bucket 
