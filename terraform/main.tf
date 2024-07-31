@@ -41,10 +41,19 @@ resource "google_storage_bucket_object" "append_obj" {
 }
 
 # Make new objects public
-resource "google_storage_default_object_access_control" "append_access_control" {
+# resource "google_storage_default_object_access_control" "append_access_control" {
+#   bucket = google_storage_bucket.append_website.name
+#   role   = "READER"
+#   entity = "allUsers"
+# }
+
+resource "google_storage_bucket_iam_binding" "example_binding" {
   bucket = google_storage_bucket.append_website.name
-  role   = "READER"
-  entity = "allUsers"
+  role   = "roles/storage.objectViewer"
+
+  members = [
+    "allUsers",
+  ]
 }
 
 # Reserve an external IP
