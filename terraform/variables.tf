@@ -5,5 +5,5 @@ variable "region" {
 
 variable "domain" {
   type    = string
-  default = "domain"
+  default = "mygcpprojects.xyz"
 }
