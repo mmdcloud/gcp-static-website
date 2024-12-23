@@ -38,11 +38,11 @@ resource "google_storage_bucket" "append_website" {
 
 # Upload website files to cloud storage bucket 
 resource "google_storage_bucket_object" "append_obj" {
-  for_each = fileset("../Append/", "**")
-  name     = each.value
-  source   = "../Append/${each.value}"
+  for_each     = fileset("../Append/", "**")
+  name         = each.value
+  source       = "../Append/${each.value}"
   content_type = data.external.mime_type[each.value].result["mime_type"]
-  bucket   = google_storage_bucket.append_website.name
+  bucket       = google_storage_bucket.append_website.name
 }
 
 # Make new objects public
