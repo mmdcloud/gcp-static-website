@@ -8,6 +8,6 @@ terraform {
 }
 
 provider "google" {
-  project = "nodal-talon-445602-m1"
+  project = "orbital-bee-455915-h5"
   region  = "us-central1"
 }
