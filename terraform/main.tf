@@ -22,20 +22,6 @@ resource "google_storage_bucket" "append_website" {
   location = var.region
 }
 
-# Registering a domain
-# resource "google_dns_managed_zone" "domain" {
-#   name       = "domain"
-#   dns_name   = var.domain
-#   visibility = "public"
-#   cloud_logging_config {
-#     enable_logging = false
-#   }
-#   dnssec_config {
-#     state = "off"
-#   }
-#   description = "append-zone"
-# }
-
 # Upload website files to cloud storage bucket 
 resource "google_storage_bucket_object" "append_obj" {
   for_each     = fileset("../Append/", "**")
@@ -44,13 +30,6 @@ resource "google_storage_bucket_object" "append_obj" {
   content_type = data.external.mime_type[each.value].result["mime_type"]
   bucket       = google_storage_bucket.append_website.name
 }
-
-# Make new objects public
-# resource "google_storage_default_object_access_control" "append_access_control" {
-#   bucket = google_storage_bucket.append_website.name
-#   role   = "READER"
-#   entity = "allUsers"
-# }
 
 # Cloud storage IAM binding
 resource "google_storage_bucket_iam_binding" "storage_iam_binding" {
@@ -61,15 +40,6 @@ resource "google_storage_bucket_iam_binding" "storage_iam_binding" {
     "allUsers"
   ]
 }
-
-# Add the IP to the DNS
-# resource "google_dns_record_set" "append_dns_record_set" {
-#   name         = "website.${var.domain}."
-#   type         = "A"
-#   ttl          = 300
-#   managed_zone = google_dns_managed_zone.domain.name
-#   rrdatas      = [google_compute_global_address.append_compute_global_address.address]
-# }
 
 # Add the bucket as a CDN backend
 resource "google_compute_backend_bucket" "append_website_cdn" {
@@ -84,14 +54,6 @@ resource "google_compute_global_address" "append_compute_global_address" {
   name         = "append-compute-global-address"
   address_type = "EXTERNAL"
 }
-
-# Create HTTPS certificate
-# resource "google_compute_managed_ssl_certificate" "append_cert" {
-#   name = "append-cert"
-#   managed {
-#     domains = [google_dns_record_set.append_dns_record_set.name]
-#   }
-# }
 
 # GCP URL MAP
 resource "google_compute_url_map" "append_compute_url_map" {
