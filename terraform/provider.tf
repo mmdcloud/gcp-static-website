@@ -8,6 +8,6 @@ terraform {
 }
 
 provider "google" {
-  project = "orbital-bee-455915-h5"
+  project = "encoded-alpha-457108-e8"
   region  = "us-central1"
 }
