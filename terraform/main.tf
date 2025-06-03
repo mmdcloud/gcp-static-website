@@ -1,7 +1,7 @@
 # Getting MIME type for each of the files
 data "external" "mime_type" {
   for_each = fileset("../Append/", "**")
-  program  = ["python3", "${path.module}/get_mime_type.py", "../../Append/${each.value}"]
+  program  = ["python3", "${path.module}/scripts/get_mime_type.py", "../../Append/${each.value}"]
 }
 
 # Bucket to store website
