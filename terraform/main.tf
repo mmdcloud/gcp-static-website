@@ -1,7 +1,7 @@
 # Getting MIME type for each of the files
 data "external" "mime_type" {
-  for_each = fileset("../Append/", "**")
-  program  = ["python3", "${path.module}/scripts/get_mime_type.py", "../../Append/${each.value}"]
+  for_each = fileset("src/", "**")
+  program  = ["python3", "${path.module}/scripts/get_mime_type.py", "../src/${each.value}"]
 }
 
 # Bucket to store website
@@ -24,9 +24,9 @@ resource "google_storage_bucket" "append_website" {
 
 # Upload website files to cloud storage bucket 
 resource "google_storage_bucket_object" "append_obj" {
-  for_each     = fileset("../Append/", "**")
+  for_each     = fileset("src/", "**")
   name         = each.value
-  source       = "../Append/${each.value}"
+  source       = "src/${each.value}"
   content_type = data.external.mime_type[each.value].result["mime_type"]
   bucket       = google_storage_bucket.append_website.name
 }
