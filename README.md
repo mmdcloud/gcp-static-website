@@ -1,177 +1,159 @@
-# Hosting a Static Website on Google Cloud Platform
+# Modern Website Template with GCP Infrastructure Deployment
 
-This repository contains code and configuration for deploying a secure, scalable static website on Google Cloud Platform.
+This project provides a responsive Bootstrap website template with automated Google Cloud Platform (GCP) infrastructure deployment. It combines a modern, feature-rich website template with Infrastructure as Code (IaC) capabilities for seamless cloud hosting.
 
-## Overview
+The template offers a comprehensive set of features including responsive navigation, animations, blog functionality, and portfolio showcasing. The infrastructure component automates the deployment process using Terraform to set up a fully configured GCP environment with CDN capabilities and global load balancing.
 
-This project provides a complete solution for hosting static websites on GCP using Cloud Storage, Cloud CDN, and Cloud Load Balancing. The setup includes custom domain configuration, HTTPS support, and automated deployment through Cloud Build.
+## Repository Structure
+```
+.
+├── src/                          # Website source files
+│   ├── assets/                   # Static assets (CSS, JS, vendor libraries)
+│   │   ├── css/                 # Custom CSS styles
+│   │   ├── js/                  # Custom JavaScript functionality
+│   │   ├── scss/               # SCSS source files (Pro version only)
+│   │   └── vendor/             # Third-party libraries (Bootstrap, AOS, etc.)
+│   ├── forms/                    # Contact form handling
+│   └── *.html                    # Website pages (index, blog, portfolio, etc.)
+└── terraform/                    # Infrastructure as Code
+    ├── main.tf                   # Main Terraform configuration
+    ├── variables.tf              # Variable definitions
+    ├── outputs.tf                # Output definitions
+    ├── provider.tf               # Provider configuration
+    └── scripts/                  # Helper scripts
+```
 
-![Architecture Diagram](https://storage.googleapis.com/your-bucket/static-website-architecture.png)
+## Usage Instructions
+### Prerequisites
+- Node.js (for development tools)
+- Python 3.x (for MIME type detection script)
+- Terraform >= 1.0
+- Google Cloud SDK
+- A Google Cloud Platform account with billing enabled
 
-## Features
+### Installation
 
-- 📦 **Cost-effective storage** using Google Cloud Storage buckets
-- 🔒 **Free SSL/TLS certificates** with automatic renewal
-- 🚀 **Global content delivery** via Cloud CDN
-- 🔄 **Continuous deployment** using Cloud Build
-- 🛡️ **Security features** including custom headers and access control
-- 📊 **Performance monitoring** with Cloud Monitoring
-
-## Prerequisites
-
-- Google Cloud Platform account
-- Registered domain name
-- `gcloud` CLI installed and configured
-- Basic knowledge of HTML, CSS, and JavaScript
-
-## Getting Started
-
-### 1. Clone the Repository
-
+1. Clone the website template:
 ```bash
-git clone https://github.com/yourusername/static-website-gcp.git
-cd static-website-gcp
+git clone <repository-url>
+cd <repository-name>
 ```
 
-### 2. Configure the Project
-
-Edit the `config.yaml` file to set your project-specific variables:
-
-```yaml
-project_id: "your-gcp-project-id"
-domain_name: "yourdomain.com"
-region: "us-central1"
-website_sources: "./website"
+2. Set up GCP credentials:
+```bash
+gcloud auth application-default login
 ```
 
-### 3. Set Up Infrastructure Using Terraform
-
+3. Initialize Terraform:
 ```bash
 cd terraform
 terraform init
+```
+
+### Quick Start
+1. Configure website content:
+   - Modify HTML files in `src/` directory
+   - Update styles in `src/assets/css/main.css`
+   - Customize JavaScript in `src/assets/js/main.js`
+
+2. Deploy to GCP:
+```bash
+cd terraform
 terraform plan
 terraform apply
 ```
 
-### 4. Deploy Your Website
+### More Detailed Examples
 
-Place your static website files in the `website` directory, then run:
+#### Customizing the Navigation Menu
+```html
+<nav id="navmenu" class="navmenu">
+  <ul>
+    <li><a href="index.html#hero">Home</a></li>
+    <li><a href="index.html#about">About</a></li>
+    <!-- Add more menu items -->
+  </ul>
+</nav>
+```
 
+#### Adding Blog Posts
+```html
+<article>
+  <div class="post-img">
+    <img src="assets/img/blog/blog-1.jpg" alt="" class="img-fluid">
+  </div>
+  <p class="post-category">Category</p>
+  <h2 class="title">
+    <a href="blog-details.html">Post Title</a>
+  </h2>
+</article>
+```
+
+### Troubleshooting
+
+#### Common Issues
+1. MIME Type Detection Failure
+   - Error: "Unable to determine MIME type"
+   - Solution: Ensure Python 3.x is installed and the script has execution permissions
+   ```bash
+   chmod +x terraform/scripts/get_mime_type.py
+   ```
+
+2. GCP Deployment Issues
+   - Error: "Permission denied"
+   - Solution: Verify GCP credentials and project access
+   ```bash
+   gcloud auth list
+   gcloud config set project YOUR_PROJECT_ID
+   ```
+
+## Data Flow
+The website template processes and serves content through a CDN-enabled infrastructure on GCP.
+
+```ascii
+[Client Browser] → [Global Load Balancer] → [Cloud CDN] → [Cloud Storage Bucket]
+                                                            ↑
+[Local Development] → [Terraform] → [GCP Infrastructure] ───┘
+```
+
+Component Interactions:
+1. Terraform creates and configures GCP resources
+2. Website files are uploaded to Cloud Storage
+3. Cloud CDN caches content for improved performance
+4. Global Load Balancer routes traffic to nearest CDN edge
+5. Client requests are served from optimal locations
+
+## Infrastructure
+
+![Infrastructure diagram](./docs/infra.svg)
+- **Storage**:
+  - google_storage_bucket.append_website: Main website content bucket
+  - google_storage_bucket_object.append_obj: Website files
+
+- **CDN and Load Balancing**:
+  - google_compute_backend_bucket.append_website_cdn: CDN backend configuration
+  - google_compute_global_address.append_compute_global_address: Global IP reservation
+  - google_compute_url_map.append_compute_url_map: URL routing rules
+  - google_compute_target_http_proxy.append_target_proxy: HTTP proxy configuration
+  - google_compute_global_forwarding_rule.append_global_forwarding_rule: Global load balancing
+
+## Deployment
+1. Prerequisites:
+   - GCP project with billing enabled
+   - Terraform installed
+   - Google Cloud SDK configured
+
+2. Deployment Steps:
 ```bash
-./deploy.sh
+# Initialize Terraform
+terraform init
+
+# Review changes
+terraform plan
+
+# Apply infrastructure
+terraform apply
+
+# Verify deployment
+terraform output website_url
 ```
-
-### 5. Set Up DNS Records
-
-After deployment, configure your domain's DNS records to point to the load balancer's IP address:
-
-```
-A @ [LOAD_BALANCER_IP_ADDRESS]
-CNAME www [YOUR_DOMAIN]
-```
-
-## Detailed Setup Instructions
-
-### Creating a Cloud Storage Bucket
-
-```bash
-gsutil mb -l us-central1 -b on gs://your-website-bucket
-gsutil web set -m index.html -e 404.html gs://your-website-bucket
-```
-
-### Uploading Website Files
-
-```bash
-gsutil -m cp -r ./website/* gs://your-website-bucket
-gsutil iam ch allUsers:objectViewer gs://your-website-bucket
-```
-
-### Setting Up Load Balancing and CDN
-
-1. Create a load balancer with HTTPS
-2. Configure a backend bucket
-3. Set up Cloud CDN
-4. Request an SSL certificate
-
-See `docs/load-balancer-setup.md` for detailed instructions.
-
-### Automating Deployments
-
-Set up a Cloud Build trigger to automatically deploy your website when changes are pushed to your repository:
-
-```yaml
-# cloudbuild.yaml
-steps:
-  - name: 'gcr.io/cloud-builders/gsutil'
-    args: ['-m', 'cp', '-r', './website/*', 'gs://your-website-bucket']
-```
-
-## Terraform Configuration
-
-This repository includes Terraform configurations for creating the entire infrastructure:
-
-```hcl
-# Main infrastructure setup
-module "static_website" {
-  source      = "./modules/static-website"
-  project_id  = var.project_id
-  domain_name = var.domain_name
-  
-  enable_cdn              = true
-  create_ssl_certificate  = true
-  enable_security_headers = true
-  
-  website_source_dir = "../website"
-}
-```
-
-See the `terraform` directory for complete configuration files.
-
-## Performance Optimization
-
-- Enable browser caching with appropriate headers
-- Compress static assets
-- Optimize images using WebP format
-- Configure custom caching strategies in Cloud CDN
-
-## Security Considerations
-
-- Secure resource permissions
-- Set up appropriate firewall rules
-- Configure security headers (HSTS, CSP, etc.)
-- Implement Cloud Armor for additional security (optional)
-
-## Monitoring and Analytics
-
-Monitor your website's performance and usage with:
-
-- Cloud Monitoring dashboards
-- Cloud Logging for access logs
-- Integration with Google Analytics
-
-## Cost Optimization
-
-Estimated monthly costs for a small to medium traffic website:
-
-- Cloud Storage: ~$0.50
-- Cloud CDN: ~$0.10 + data transfer
-- Load Balancer: ~$18
-- SSL Certificate: Free
-
-See `docs/cost-optimization.md` for tips on reducing costs.
-
-## Troubleshooting
-
-Common issues and solutions:
-
-- **404 errors**: Ensure index.html is properly configured
-- **SSL issues**: Check certificate provisioning status
-- **Deployment failures**: Verify permissions and build configuration
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.

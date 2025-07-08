@@ -1,0 +1,26 @@
+digraph INFRA {
+  node [ color = "black", fillcolor = "#E6E6E6", height =1, style = "filled,bold,rounded", fontname = "Arial" ];
+  "append_website" [ label = "append_website
+(google_storage_bucket)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "append_obj" [ label = "append_obj
+(google_storage_bucket_object)", shape =cylinder, fillcolor = "#FFF5CD" ];
+  "storage_iam_binding" [ label = "storage_iam_binding
+(google_storage_bucket_iam_binding)", shape =rectangle ];
+  "append_website_cdn" [ label = "append_website_cdn
+(google_compute_backend_bucket)", shape =rectangle, fillcolor = "#B7E0FF" ];
+  "append_compute_global_address" [ label = "append_compute_global_address
+(google_compute_global_address)", shape =rectangle, fillcolor = "#E78F81" ];
+  "append_compute_url_map" [ label = "append_compute_url_map
+(google_compute_url_map)", shape =rectangle, fillcolor = "#E78F81" ];
+  "append_target_proxy" [ label = "append_target_proxy
+(google_compute_target_http_proxy)", shape =rectangle, fillcolor = "#E78F81" ];
+  "append_global_forwarding_rule" [ label = "append_global_forwarding_rule
+(google_compute_global_forwarding_rule)", shape =rectangle, fillcolor = "#E78F81" ];
+  "append_obj" -> "append_website";
+  "storage_iam_binding" -> "append_website";
+  "append_website_cdn" -> "append_website";
+  "append_compute_url_map" -> "append_website_cdn";
+  "append_target_proxy" -> "append_compute_url_map";
+  "append_global_forwarding_rule" -> "append_compute_global_address";
+  "append_global_forwarding_rule" -> "append_target_proxy";
+}
