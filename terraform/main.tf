@@ -1,10 +1,15 @@
+
+# -------------------------------------------------------------------------------
 # Getting MIME type for each of the files
+# -------------------------------------------------------------------------------
 data "external" "mime_type" {
   for_each = fileset("../src/", "**")
   program  = ["python3", "${path.module}/scripts/get_mime_type.py", "../../src/${each.value}"]
 }
 
+# -------------------------------------------------------------------------------
 # Bucket to store website
+# -------------------------------------------------------------------------------
 resource "google_storage_bucket" "append_website" {
   name          = "append_website"
   storage_class = "STANDARD"
@@ -22,7 +27,9 @@ resource "google_storage_bucket" "append_website" {
   location = var.region
 }
 
+# -------------------------------------------------------------------------------
 # Upload website files to cloud storage bucket 
+# -------------------------------------------------------------------------------
 resource "google_storage_bucket_object" "append_obj" {
   for_each     = fileset("../src/", "**")
   name         = each.value
@@ -31,7 +38,9 @@ resource "google_storage_bucket_object" "append_obj" {
   bucket       = google_storage_bucket.append_website.name
 }
 
+# -------------------------------------------------------------------------------
 # Cloud storage IAM binding
+# -------------------------------------------------------------------------------
 resource "google_storage_bucket_iam_binding" "storage_iam_binding" {
   bucket = google_storage_bucket.append_website.name
   role   = "roles/storage.objectAdmin"
@@ -41,7 +50,9 @@ resource "google_storage_bucket_iam_binding" "storage_iam_binding" {
   ]
 }
 
+# -------------------------------------------------------------------------------
 # Add the bucket as a CDN backend
+# -------------------------------------------------------------------------------
 resource "google_compute_backend_bucket" "append_website_cdn" {
   name        = "append-website-cdn"
   description = "Content delivery network for append website bucket"
@@ -49,13 +60,17 @@ resource "google_compute_backend_bucket" "append_website_cdn" {
   enable_cdn  = true
 }
 
+# -------------------------------------------------------------------------------
 # Reserve an external IP
+# -------------------------------------------------------------------------------
 resource "google_compute_global_address" "append_compute_global_address" {
   name         = "append-compute-global-address"
   address_type = "EXTERNAL"
 }
 
-# GCP URL MAP
+# -------------------------------------------------------------------------------
+# URL Map
+# -------------------------------------------------------------------------------
 resource "google_compute_url_map" "append_compute_url_map" {
   name            = "append-compute-url-map"
   default_service = google_compute_backend_bucket.append_website_cdn.self_link
@@ -71,14 +86,18 @@ resource "google_compute_url_map" "append_compute_url_map" {
 
 # If DNS records are to be attached then use 'google_compute_target_http_proxy'
 
+# -------------------------------------------------------------------------------
 # GCP target proxy
+# -------------------------------------------------------------------------------
 resource "google_compute_target_http_proxy" "append_target_proxy" {
   provider = google
   name     = "append-target-proxy"
   url_map  = google_compute_url_map.append_compute_url_map.self_link
 }
 
+# -------------------------------------------------------------------------------
 # GCP forwarding rule
+# -------------------------------------------------------------------------------
 resource "google_compute_global_forwarding_rule" "append_global_forwarding_rule" {
   name                  = "append-global-forwarding-rule"
   load_balancing_scheme = "EXTERNAL"
