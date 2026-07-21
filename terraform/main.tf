@@ -6,6 +6,8 @@ locals {
   src_files = fileset(var.src_dir, "**")
 }
 
+data "google_project" "current" {}
+
 # -------------------------------------------------------------------------------
 # MIME type resolution (one call per source file)
 # -------------------------------------------------------------------------------
@@ -25,7 +27,7 @@ resource "google_storage_bucket" "website" {
   location      = var.region
   storage_class = "STANDARD"
   force_destroy = true # (var.environment != "prod") protect prod bucket from accidental destroy
-# 
+  # 
   uniform_bucket_level_access = true       # required when prevention = enforced
   public_access_prevention    = "enforced" # ✅ blocks direct public object access
 
@@ -56,6 +58,12 @@ resource "google_storage_bucket" "website" {
 # This replaces the insecure "allUsers → objectAdmin" binding.
 # -------------------------------------------------------------------------------
 data "google_storage_project_service_account" "gcs_account" {}
+
+resource "google_storage_bucket_iam_member" "lb_object_viewer" {
+  bucket = google_storage_bucket.website.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:service-${data.google_project.current.number}@https-lb.iam.gserviceaccount.com"
+}
 
 resource "google_storage_bucket_iam_member" "cdn_object_viewer" {
   bucket = google_storage_bucket.website.name
@@ -108,26 +116,26 @@ resource "google_compute_global_address" "website_ip" {
 # -------------------------------------------------------------------------------
 # Managed SSL certificate (replaces plain HTTP proxy)
 # -------------------------------------------------------------------------------
-resource "google_compute_managed_ssl_certificate" "website_cert" {
-  name = "${local.bucket_name}-cert"
+# resource "google_compute_managed_ssl_certificate" "website_cert" {
+#   name = "${local.bucket_name}-cert"
 
-  managed {
-    domains = [var.domain]
-  }
-}
+#   managed {
+#     domains = [var.domain]
+#   }
+# }
 
 # -------------------------------------------------------------------------------
 # URL map — HTTP → HTTPS redirect
 # -------------------------------------------------------------------------------
-resource "google_compute_url_map" "http_redirect" {
-  name = "${local.bucket_name}-http-redirect"
+# resource "google_compute_url_map" "http_redirect" {
+#   name = "${local.bucket_name}-http-redirect"
 
-  default_url_redirect {
-    https_redirect         = true
-    redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
-    strip_query            = false
-  }
-}
+#   default_url_redirect {
+#     https_redirect         = true
+#     redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
+#     strip_query            = false
+#   }
+# }
 
 # -------------------------------------------------------------------------------
 # URL map — HTTPS traffic to CDN backend
@@ -152,17 +160,17 @@ resource "google_compute_url_map" "website" {
 # -------------------------------------------------------------------------------
 resource "google_compute_target_http_proxy" "http_redirect" {
   name    = "${local.bucket_name}-http-proxy"
-  url_map = google_compute_url_map.http_redirect.self_link
+  url_map = google_compute_url_map.website.self_link
 }
 
 # -------------------------------------------------------------------------------
 # HTTPS proxy — serves real traffic
 # -------------------------------------------------------------------------------
-resource "google_compute_target_https_proxy" "website" {
-  name             = "${local.bucket_name}-https-proxy"
-  url_map          = google_compute_url_map.website.self_link
-  ssl_certificates = [google_compute_managed_ssl_certificate.website_cert.self_link]
-}
+# resource "google_compute_target_https_proxy" "website" {
+#   name             = "${local.bucket_name}-https-proxy"
+#   url_map          = google_compute_url_map.website.self_link
+#   ssl_certificates = [google_compute_managed_ssl_certificate.website_cert.self_link]
+# }
 
 # -------------------------------------------------------------------------------
 # Forwarding rules
@@ -180,15 +188,15 @@ resource "google_compute_global_forwarding_rule" "http" {
   }
 }
 
-resource "google_compute_global_forwarding_rule" "https" {
-  name                  = "${local.bucket_name}-https-rule"
-  load_balancing_scheme = "EXTERNAL"
-  ip_address            = google_compute_global_address.website_ip.address
-  port_range            = "443"
-  target                = google_compute_target_https_proxy.website.self_link
+# resource "google_compute_global_forwarding_rule" "https" {
+#   name                  = "${local.bucket_name}-https-rule"
+#   load_balancing_scheme = "EXTERNAL"
+#   ip_address            = google_compute_global_address.website_ip.address
+#   port_range            = "443"
+#   target                = google_compute_target_https_proxy.website.self_link
 
-  labels = {
-    environment = var.environment
-    managed_by  = "terraform"
-  }
-}
+#   labels = {
+#     environment = var.environment
+#     managed_by  = "terraform"
+#   }
+# }
