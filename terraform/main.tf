@@ -17,41 +17,73 @@ data "external" "mime_type" {
 }
 
 # -------------------------------------------------------------------------------
-# GCS bucket — website hosting, no public access at the bucket level.
-# Objects are served through the Load Balancer / CDN instead of directly,
-# which keeps "public_access_prevention = enforced" and avoids granting
-# objectAdmin to allUsers (a common misconfiguration).
+# GCS bucket 
 # -------------------------------------------------------------------------------
-resource "google_storage_bucket" "website" {
-  name          = local.bucket_name
+module "website_bucket" {
+  source        = "./modules/gcs"
   location      = var.region
+  name          = local.bucket_name
   storage_class = "STANDARD"
-  force_destroy = true # (var.environment != "prod") protect prod bucket from accidental destroy
-  # 
-  uniform_bucket_level_access = true       # required when prevention = enforced
-  public_access_prevention    = "enforced" # ✅ blocks direct public object access
-
-  versioning {
-    enabled = true # allows rollback of accidental overwrites
-  }
-
-  website {
+  cors = [
+    {
+      origin          = ["*"]
+      max_age_seconds = 3600
+      method          = ["GET", "POST", "PUT", "DELETE"]
+      response_header = ["*"]
+    }
+  ]
+  versioning = true
+  website = {
     main_page_suffix = "index.html"
     not_found_page   = "404.html"
   }
-
-  lifecycle_rule {
-    action { type = "Delete" }
-    condition {
-      num_newer_versions = 3 # keep only last 3 versions to control storage costs
+  lifecycle_rules = [
+    {
+      condition = {
+        num_newer_versions = 1
+      }
+      action = {
+        type = "Delete"
+      }
     }
-  }
-
-  labels = {
-    environment = var.environment
-    managed_by  = "terraform"
-  }
+  ]
+  public_access_prevention    = "enforced"
+  contents                    = []
+  notifications               = []
+  force_destroy               = true
+  uniform_bucket_level_access = true
 }
+
+# resource "google_storage_bucket" "website" {
+#   name          = local.bucket_name
+#   location      = var.region
+#   storage_class = "STANDARD"
+#   force_destroy = true # (var.environment != "prod") protect prod bucket from accidental destroy
+#   # 
+#   uniform_bucket_level_access = true       # required when prevention = enforced
+#   public_access_prevention    = "enforced" # ✅ blocks direct public object access
+
+#   versioning {
+#     enabled = true # allows rollback of accidental overwrites
+#   }
+
+#   website {
+#     main_page_suffix = "index.html"
+#     not_found_page   = "404.html"
+#   }
+
+#   lifecycle_rule {
+#     action { type = "Delete" }
+#     condition {
+#       num_newer_versions = 3 # keep only last 3 versions to control storage costs
+#     }
+#   }
+
+#   labels = {
+#     environment = var.environment
+#     managed_by  = "terraform"
+#   }
+# }
 
 # -------------------------------------------------------------------------------
 # Grant the Cloud Storage service account permission to serve objects via CDN.
@@ -60,13 +92,13 @@ resource "google_storage_bucket" "website" {
 data "google_storage_project_service_account" "gcs_account" {}
 
 resource "google_storage_bucket_iam_member" "lb_object_viewer" {
-  bucket = google_storage_bucket.website.name
+  bucket = module.website_bucket.bucket_name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:service-${data.google_project.current.number}@https-lb.iam.gserviceaccount.com"
 }
 
 resource "google_storage_bucket_iam_member" "cdn_object_viewer" {
-  bucket = google_storage_bucket.website.name
+  bucket = module.website_bucket.bucket_name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${data.google_storage_project_service_account.gcs_account.email_address}"
 }
@@ -79,7 +111,7 @@ resource "google_storage_bucket_object" "website_files" {
   name         = each.value
   source       = "${var.src_dir}/${each.value}"
   content_type = data.external.mime_type[each.value].result["mime_type"]
-  bucket       = google_storage_bucket.website.name
+  bucket       = module.website_bucket.bucket_name
 
   # Cache-busting: object is replaced when its content changes.
   # Terraform detects this via the md5hash attribute automatically.
@@ -91,7 +123,7 @@ resource "google_storage_bucket_object" "website_files" {
 resource "google_compute_backend_bucket" "website_cdn" {
   name        = "${local.bucket_name}-cdn"
   description = "CDN backend for the ${var.environment} website bucket"
-  bucket_name = google_storage_bucket.website.name
+  bucket_name = module.website_bucket.bucket_name
   enable_cdn  = true
 
   cdn_policy {

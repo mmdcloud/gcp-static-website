@@ -10,7 +10,7 @@ output "website_ip" {
 
 output "bucket_name" {
   description = "Name of the GCS bucket hosting the website files."
-  value       = google_storage_bucket.website.name
+  value       = module.website_bucket.bucket_name
 }
 
 output "cdn_backend_name" {
