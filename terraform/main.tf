@@ -54,36 +54,6 @@ module "website_bucket" {
   uniform_bucket_level_access = true
 }
 
-# resource "google_storage_bucket" "website" {
-#   name          = local.bucket_name
-#   location      = var.region
-#   storage_class = "STANDARD"
-#   force_destroy = true # (var.environment != "prod") protect prod bucket from accidental destroy
-#   # 
-#   uniform_bucket_level_access = true       # required when prevention = enforced
-#   public_access_prevention    = "enforced" # ✅ blocks direct public object access
-
-#   versioning {
-#     enabled = true # allows rollback of accidental overwrites
-#   }
-
-#   website {
-#     main_page_suffix = "index.html"
-#     not_found_page   = "404.html"
-#   }
-
-#   lifecycle_rule {
-#     action { type = "Delete" }
-#     condition {
-#       num_newer_versions = 3 # keep only last 3 versions to control storage costs
-#     }
-#   }
-
-#   labels = {
-#     environment = var.environment
-#     managed_by  = "terraform"
-#   }
-# }
 
 # -------------------------------------------------------------------------------
 # Grant the Cloud Storage service account permission to serve objects via CDN.
