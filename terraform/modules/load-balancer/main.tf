@@ -1,6 +1,3 @@
-############################################
-# Global static IP(s)
-############################################
 resource "google_compute_global_address" "ipv4" {
   count = var.create_static_ip ? 1 : 0
 
@@ -37,9 +34,22 @@ resource "google_compute_health_check" "this" {
   healthy_threshold   = each.value.health_check.healthy_threshold
   unhealthy_threshold = each.value.health_check.unhealthy_threshold
 
-  http_health_check {
-    port         = each.value.health_check.port
-    request_path = each.value.health_check.request_path
+  # Match the health check protocol to the backend protocol so TLS-terminating
+  # backends (HTTPS/HTTP2) are actually probed over the right protocol.
+  dynamic "http_health_check" {
+    for_each = contains(["HTTPS", "HTTP2"], each.value.protocol) ? [] : [1]
+    content {
+      port         = each.value.health_check.port
+      request_path = each.value.health_check.request_path
+    }
+  }
+
+  dynamic "https_health_check" {
+    for_each = contains(["HTTPS", "HTTP2"], each.value.protocol) ? [1] : []
+    content {
+      port         = each.value.health_check.port
+      request_path = each.value.health_check.request_path
+    }
   }
 }
 
@@ -205,29 +215,86 @@ resource "google_compute_backend_service" "this" {
 }
 
 ############################################
-# URL map (path/host routing)
+# Backend buckets (GCS-backed, e.g. static-site / CDN origins)
+#
+# Optional alternative to google_compute_backend_service. Keyed the same way
+# as var.backends so both can feed the same url_map. A given routing key must
+# be defined in exactly one of var.backends / var.backend_buckets - never
+# both - enforced by the check block below.
 ############################################
+resource "google_compute_backend_bucket" "this" {
+  for_each = var.backend_buckets
 
+  project     = var.project_id
+  name        = "${var.name}-${each.key}-backend-bucket"
+  description = each.value.description
+  bucket_name = each.value.bucket_name
+  enable_cdn  = each.value.enable_cdn
+
+  dynamic "cdn_policy" {
+    for_each = each.value.enable_cdn ? [1] : []
+    content {
+      cache_mode        = each.value.cdn_policy.cache_mode
+      default_ttl       = each.value.cdn_policy.default_ttl
+      client_ttl        = each.value.cdn_policy.client_ttl
+      max_ttl           = each.value.cdn_policy.max_ttl
+      negative_caching  = each.value.cdn_policy.negative_caching
+      serve_while_stale = each.value.cdn_policy.serve_while_stale
+    }
+  }
+}
+
+############################################
+# URL map (path/host routing)
+#
+# NOTE: a url_map can set exactly ONE of default_service /
+# default_route_action / default_url_redirect. This map is the routing map
+# used by both the HTTP listener (when not redirecting) and the HTTPS
+# listener, so it must only carry default_service. The redirect-only map
+# lives below and is used solely by the HTTP proxy when https_redirect=true.
+############################################
 locals {
-  default_backend_key = one([for k, v in var.backends : k if v.is_default])
+  # Unified view of both backend flavors so the url_map doesn't care whether
+  # a given routing key is a backend_service or a backend_bucket.
+  backend_meta = merge(
+    { for k, v in var.backends : k => {
+        is_default    = v.is_default
+        host_patterns = v.host_patterns
+        path_patterns = v.path_patterns
+      }
+    },
+    { for k, v in var.backend_buckets : k => {
+        is_default    = v.is_default
+        host_patterns = v.host_patterns
+        path_patterns = v.path_patterns
+      }
+    }
+  )
+
+  # Resolves a routing key to the right resource's id, regardless of whether
+  # it's backed by google_compute_backend_service or google_compute_backend_bucket.
+  service_ids = merge(
+    { for k, v in google_compute_backend_service.this : k => v.id },
+    { for k, v in google_compute_backend_bucket.this : k => v.id }
+  )
+
+  default_backend_key = one([for k, v in local.backend_meta : k if v.is_default])
 
   # host_rule/path_matcher entries only for non-default backends with explicit
   # host or path patterns configured.
   routed_backends = {
-    for k, v in var.backends :
+    for k, v in local.backend_meta :
     k => v if !v.is_default && (length(v.host_patterns) > 0 || length(v.path_patterns) > 0)
   }
+
+  backend_key_overlap = setintersection(toset(keys(var.backends)), toset(keys(var.backend_buckets)))
 }
 
 resource "google_compute_url_map" "this" {
   project         = var.project_id
   name            = "${var.name}-url-map"
-  default_service = google_compute_backend_service.this[local.default_backend_key].id
-  default_url_redirect {
-    https_redirect         = false
-    redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
-    strip_query             = false
-  }
+  default_service = local.service_ids[local.default_backend_key]
+
   dynamic "host_rule" {
     for_each = local.routed_backends
     content {
@@ -240,112 +307,153 @@ resource "google_compute_url_map" "this" {
     for_each = local.routed_backends
     content {
       name            = "${path_matcher.key}-matcher"
-      default_service = google_compute_backend_service.this[path_matcher.key].id
+      default_service = local.service_ids[path_matcher.key]
 
       dynamic "path_rule" {
         for_each = length(path_matcher.value.path_patterns) > 0 ? [1] : []
         content {
           paths   = path_matcher.value.path_patterns
-          service = google_compute_backend_service.this[path_matcher.key].id
+          service = local.service_ids[path_matcher.key]
         }
       }
     }
   }
 }
 
+# Redirect-only map: HTTP -> HTTPS. Only built when SSL is enabled and the
+# caller wants port 80 to redirect rather than serve traffic directly.
+resource "google_compute_url_map" "https_redirect" {
+  count = var.enable_ssl && var.https_redirect ? 1 : 0
+
+  project = var.project_id
+  name    = "${var.name}-https-redirect"
+
+  default_url_redirect {
+    https_redirect         = true
+    redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
+    strip_query             = false
+  }
+}
+
+locals {
+  # Which url_map the HTTP (port 80) proxy points at.
+  http_url_map_id = var.enable_ssl && var.https_redirect ? google_compute_url_map.https_redirect[0].id : google_compute_url_map.this.id
+}
+
 ############################################
-# HTTP -> HTTPS redirect (port 80)
+# HTTP listener (port 80) — optional
+#
+# Two modes, controlled independently of SSL:
+#   enable_http = true, https_redirect = true  -> 301s everything to HTTPS
+#   enable_http = true, https_redirect = false  -> serves the routing map directly
+#   enable_http = false                          -> no port-80 listener at all
 ############################################
-# resource "google_compute_url_map" "http_redirect" {
-#   count = var.enable_http_redirect ? 1 : 0
-
-#   project = var.project_id
-#   name    = "${var.name}-http-redirect"
-
-#   default_url_redirect {
-#     https_redirect         = false
-#     redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
-#     strip_query             = false
-#   }
-# }
-
 resource "google_compute_target_http_proxy" "this" {
-  count = var.enable_http_redirect ? 1 : 0
+  count = var.enable_http ? 1 : 0
 
   project = var.project_id
   name    = "${var.name}-http-proxy"
-  url_map = google_compute_url_map.this.id
+  url_map = local.http_url_map_id
 }
 
 resource "google_compute_global_forwarding_rule" "http" {
-  count = var.enable_http_redirect ? 1 : 0
+  count = var.enable_http ? 1 : 0
 
-  project               = var.project_id
-  name                  = "${var.name}-http-fr"
-  target                = google_compute_target_http_proxy.this[0].id
-  port_range            = "80"
-  ip_address             = local.lb_ipv4_address
-  load_balancing_scheme = "EXTERNAL_MANAGED"
-  labels                = var.labels
+  project                = var.project_id
+  name                   = "${var.name}-http-fr"
+  target                 = google_compute_target_http_proxy.this[0].id
+  port_range             = "80"
+  ip_address              = local.lb_ipv4_address
+  load_balancing_scheme  = "EXTERNAL_MANAGED"
+  labels                 = var.labels
 }
 
 ############################################
-# Managed SSL certificate / SSL policy
+# Managed SSL certificate / SSL policy — optional (var.enable_ssl)
 ############################################
+resource "google_compute_managed_ssl_certificate" "this" {
+  count = var.enable_ssl && var.managed_ssl_certificate ? 1 : 0
 
-# resource "google_compute_managed_ssl_certificate" "this" {
-#   count = var.managed_ssl_certificate ? 1 : 0
+  project = var.project_id
+  name    = "${var.name}-cert"
 
-#   project = var.project_id
-#   name    = "${var.name}-cert"
+  managed {
+    domains = var.domains
+  }
 
-#   managed {
-#     domains = var.domains
-#   }
+  lifecycle {
+    create_before_destroy = true
+  }
+}
 
-#   lifecycle {
-#     create_before_destroy = true
-#   }
-# }
+resource "google_compute_ssl_policy" "this" {
+  count = var.enable_ssl ? 1 : 0
 
-# resource "google_compute_ssl_policy" "this" {
-#   project         = var.project_id
-#   name            = "${var.name}-ssl-policy"
-#   profile         = var.ssl_policy_profile
-#   min_tls_version = var.ssl_policy_min_tls_version
-# }
+  project         = var.project_id
+  name            = "${var.name}-ssl-policy"
+  profile         = var.ssl_policy_profile
+  min_tls_version = var.ssl_policy_min_tls_version
+}
 
-# ############################################
-# # HTTPS proxy + forwarding rule (port 443)
-# ############################################
+locals {
+  ssl_certificate_ids = (
+    var.enable_ssl
+    ? (var.managed_ssl_certificate ? [google_compute_managed_ssl_certificate.this[0].id] : var.ssl_certificate_ids)
+    : []
+  )
+}
 
-# resource "google_compute_target_https_proxy" "this" {
-#   project = var.project_id
-#   name    = "${var.name}-https-proxy"
-#   url_map = google_compute_url_map.this.id
+############################################
+# HTTPS proxy + forwarding rule (port 443) — optional (var.enable_ssl)
+############################################
+resource "google_compute_target_https_proxy" "this" {
+  count = var.enable_ssl ? 1 : 0
+  project = var.project_id
+  name    = "${var.name}-https-proxy"
+  url_map = google_compute_url_map.this.id
+  ssl_certificates = local.ssl_certificate_ids
+  ssl_policy       = google_compute_ssl_policy.this[0].id
+}
 
-#   ssl_certificates = var.managed_ssl_certificate ? [google_compute_managed_ssl_certificate.this[0].id] : var.ssl_certificate_ids
-#   ssl_policy       = google_compute_ssl_policy.this.id
-# }
+resource "google_compute_global_forwarding_rule" "https" {
+  count = var.enable_ssl ? 1 : 0
+  project                = var.project_id
+  name                   = "${var.name}-https-fr"
+  target                 = google_compute_target_https_proxy.this[0].id
+  port_range             = "443"
+  ip_address              = local.lb_ipv4_address
+  load_balancing_scheme  = "EXTERNAL_MANAGED"
+  labels                 = var.labels
+}
 
-# resource "google_compute_global_forwarding_rule" "https" {
-#   project               = var.project_id
-#   name                  = "${var.name}-https-fr"
-#   target                = google_compute_target_https_proxy.this.id
-#   port_range            = "443"
-#   ip_address             = local.lb_ipv4_address
-#   load_balancing_scheme = "EXTERNAL_MANAGED"
-#   labels                = var.labels
-# }
+resource "google_compute_global_forwarding_rule" "https_ipv6" {
+  count = var.enable_ssl && var.enable_ipv6 ? 1 : 0
+  project                = var.project_id
+  name                   = "${var.name}-https-fr-ipv6"
+  target                 = google_compute_target_https_proxy.this[0].id
+  port_range             = "443"
+  ip_address              = var.create_static_ip ? google_compute_global_address.ipv6[0].address : null
+  load_balancing_scheme  = "EXTERNAL_MANAGED"
+  labels                 = var.labels
+}
 
-# resource "google_compute_global_forwarding_rule" "https_ipv6" {
-#   count = var.enable_ipv6 ? 1 : 0
+############################################
+# Guardrails
+############################################
+check "at_least_one_listener" {
+  assert {
+    condition     = var.enable_http || var.enable_ssl
+    error_message = "Both var.enable_http and var.enable_ssl are false — the load balancer would have no forwarding rule to receive traffic on."
+  }
+}
 
-#   project               = var.project_id
-#   name                  = "${var.name}-https-fr-ipv6"
-#   target                = google_compute_target_https_proxy.this.id
-#   port_range            = "443"
-#   ip_address             = var.create_static_ip ? google_compute_global_address.ipv6[0].address : null
-#   load_balancing_scheme = "EXTERNAL_MANAGED"
-#   labels                = var.labels
-# }
+check "backend_and_backend_bucket_keys_valid" {
+  assert {
+    condition     = length(local.backend_key_overlap) == 0
+    error_message = "The following keys exist in both var.backends and var.backend_buckets: ${join(", ", local.backend_key_overlap)}. Each routing key must be backed by exactly one of a backend_service or a backend_bucket, not both."
+  }
+  assert {
+    condition     = length([for k, v in local.backend_meta : k if v.is_default]) == 1
+    error_message = "Exactly one entry across var.backends and var.backend_buckets must have is_default = true."
+  }
+}

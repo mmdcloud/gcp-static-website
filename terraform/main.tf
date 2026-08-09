@@ -54,6 +54,13 @@ module "website_bucket" {
   uniform_bucket_level_access = true
 }
 
+resource "google_storage_bucket_object" "website_files" {
+  for_each     = local.src_files
+  name         = each.value
+  source       = "${var.src_dir}/${each.value}"
+  content_type = data.external.mime_type[each.value].result["mime_type"]
+  bucket       = module.website_bucket.bucket_name
+}
 
 # -------------------------------------------------------------------------------
 # Grant the Cloud Storage service account permission to serve objects via CDN.
@@ -74,131 +81,23 @@ resource "google_storage_bucket_iam_member" "cdn_object_viewer" {
 }
 
 # -------------------------------------------------------------------------------
-# Upload website files
+# Load Balanacer Configuration (with CDN)
 # -------------------------------------------------------------------------------
-resource "google_storage_bucket_object" "website_files" {
-  for_each     = local.src_files
-  name         = each.value
-  source       = "${var.src_dir}/${each.value}"
-  content_type = data.external.mime_type[each.value].result["mime_type"]
-  bucket       = module.website_bucket.bucket_name
+module "lb" {
+  source     = "./modules/load-balancer"
+  project_id = var.project_id
+  name       = "lb"
 
-  # Cache-busting: object is replaced when its content changes.
-  # Terraform detects this via the md5hash attribute automatically.
-}
-
-# -------------------------------------------------------------------------------
-# CDN backend bucket
-# -------------------------------------------------------------------------------
-resource "google_compute_backend_bucket" "website_cdn" {
-  name        = "${local.bucket_name}-cdn"
-  description = "CDN backend for the ${var.environment} website bucket"
-  bucket_name = module.website_bucket.bucket_name
-  enable_cdn  = true
-
-  cdn_policy {
-    cache_mode        = "CACHE_ALL_STATIC"
-    default_ttl       = 3600
-    max_ttl           = 86400
-    client_ttl        = 3600
-    negative_caching  = true
-    serve_while_stale = 86400 # serve stale content while revalidating (improves resilience)
-  }
-}
-
-# -------------------------------------------------------------------------------
-# Static external IP
-# -------------------------------------------------------------------------------
-resource "google_compute_global_address" "website_ip" {
-  name         = "${local.bucket_name}-ip"
-  address_type = "EXTERNAL"
-  description  = "Static IP for the ${var.environment} website load balancer"
-}
-
-# -------------------------------------------------------------------------------
-# Managed SSL certificate (replaces plain HTTP proxy)
-# -------------------------------------------------------------------------------
-# resource "google_compute_managed_ssl_certificate" "website_cert" {
-#   name = "${local.bucket_name}-cert"
-
-#   managed {
-#     domains = [var.domain]
-#   }
-# }
-
-# -------------------------------------------------------------------------------
-# URL map — HTTP → HTTPS redirect
-# -------------------------------------------------------------------------------
-# resource "google_compute_url_map" "http_redirect" {
-#   name = "${local.bucket_name}-http-redirect"
-
-#   default_url_redirect {
-#     https_redirect         = true
-#     redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
-#     strip_query            = false
-#   }
-# }
-
-# -------------------------------------------------------------------------------
-# URL map — HTTPS traffic to CDN backend
-# -------------------------------------------------------------------------------
-resource "google_compute_url_map" "website" {
-  name            = "${local.bucket_name}-url-map"
-  default_service = google_compute_backend_bucket.website_cdn.self_link
-
-  host_rule {
-    hosts        = [var.domain]
-    path_matcher = "allpaths"
+  backend_buckets = {
+    website = {
+      is_default  = true
+      bucket_name = module.website_bucket.bucket_name
+    }
   }
 
-  path_matcher {
-    name            = "allpaths"
-    default_service = google_compute_backend_bucket.website_cdn.self_link
-  }
+  enable_ssl              = false
+  enable_http             = true
+  managed_ssl_certificate = false
+  enable_cloud_armor      = false
+  depends_on              = [module.website_bucket]
 }
-
-# -------------------------------------------------------------------------------
-# HTTP proxy — only used for redirect to HTTPS
-# -------------------------------------------------------------------------------
-resource "google_compute_target_http_proxy" "http_redirect" {
-  name    = "${local.bucket_name}-http-proxy"
-  url_map = google_compute_url_map.website.self_link
-}
-
-# -------------------------------------------------------------------------------
-# HTTPS proxy — serves real traffic
-# -------------------------------------------------------------------------------
-# resource "google_compute_target_https_proxy" "website" {
-#   name             = "${local.bucket_name}-https-proxy"
-#   url_map          = google_compute_url_map.website.self_link
-#   ssl_certificates = [google_compute_managed_ssl_certificate.website_cert.self_link]
-# }
-
-# -------------------------------------------------------------------------------
-# Forwarding rules
-# -------------------------------------------------------------------------------
-resource "google_compute_global_forwarding_rule" "http" {
-  name                  = "${local.bucket_name}-http-rule"
-  load_balancing_scheme = "EXTERNAL"
-  ip_address            = google_compute_global_address.website_ip.address
-  port_range            = "80"
-  target                = google_compute_target_http_proxy.http_redirect.self_link
-
-  labels = {
-    environment = var.environment
-    managed_by  = "terraform"
-  }
-}
-
-# resource "google_compute_global_forwarding_rule" "https" {
-#   name                  = "${local.bucket_name}-https-rule"
-#   load_balancing_scheme = "EXTERNAL"
-#   ip_address            = google_compute_global_address.website_ip.address
-#   port_range            = "443"
-#   target                = google_compute_target_https_proxy.website.self_link
-
-#   labels = {
-#     environment = var.environment
-#     managed_by  = "terraform"
-#   }
-# }

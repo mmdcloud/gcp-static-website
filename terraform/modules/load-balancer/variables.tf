@@ -48,7 +48,7 @@ variable "domains" {
 variable "managed_ssl_certificate" {
   description = "Whether to provision a Google-managed SSL certificate from var.domains. Set false to supply your own certificate(s) via ssl_certificate_ids."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "ssl_certificate_ids" {
@@ -136,11 +136,11 @@ variable "backends" {
     host_patterns = optional(list(string), []) # e.g. ["app.example.com"]
     path_patterns = optional(list(string), []) # e.g. ["/api/*"]
   }))
-
-  validation {
-    condition     = length([for k, v in var.backends : k if v.is_default]) == 1
-    error_message = "Exactly one entry in var.backends must have is_default = true."
-  }
+  default = {}
+  # validation {
+  #   condition     = length([for k, v in var.backends : k if v.is_default]) == 1
+  #   error_message = "Exactly one entry in var.backends must have is_default = true."
+  # }
 }
 
 ############################################
@@ -208,4 +208,43 @@ variable "enable_logging" {
   description = "Whether to enable backend service access logging (exported to Cloud Logging)."
   type        = bool
   default     = true
+}
+
+variable "enable_ssl" {
+  description = "Whether to enable SSL or not"
+  type        = bool
+  default     = true
+}
+
+variable "enable_http" {
+  description = "Whether to enable http or not"
+  type        = bool
+  default     = true
+}
+
+variable "https_redirect" {
+  description = "Whether to redirect http to https or not"
+  type        = bool
+  default     = true
+}
+
+variable "backend_buckets" {
+  description = "Optional GCS-backed backend buckets (e.g. static-site origins), keyed the same way as var.backends."
+  type = map(object({
+    bucket_name   = string
+    description   = optional(string, "")
+    is_default    = optional(bool, false)
+    enable_cdn    = optional(bool, true)
+    host_patterns = optional(list(string), [])
+    path_patterns = optional(list(string), [])
+    cdn_policy = optional(object({
+      cache_mode        = optional(string, "CACHE_ALL_STATIC")
+      default_ttl       = optional(number, 3600)
+      client_ttl        = optional(number, 3600)
+      max_ttl           = optional(number, 86400)
+      negative_caching  = optional(bool, true)
+      serve_while_stale = optional(number, 86400)
+    }), {})
+  }))
+  default = {}
 }
