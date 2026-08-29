@@ -95,14 +95,15 @@ resource "google_compute_subnetwork" "proxy_only" {
   ip_cidr_range = var.proxy_only_subnet_cidr
   purpose       = "REGIONAL_MANAGED_PROXY"
   role          = "ACTIVE"
-  depends_on = [google_compute_forwarding_rule.http]
 }
 
 ############################################
 # Per-backend health checks
 ############################################
 resource "google_compute_health_check" "this" {
-  for_each = local.is_external ? { for k, v in var.backends : k => v if v.manage_health_check } : {}
+  for_each = local.is_external ? {
+    for k, v in var.backends : k => v if v.manage_health_check && !v.is_serverless_neg
+  } : {}
 
   project             = var.project_id
   name                = "${var.name}-${each.key}-hc"
@@ -129,7 +130,9 @@ resource "google_compute_health_check" "this" {
 }
 
 resource "google_compute_region_health_check" "this" {
-  for_each = local.is_internal ? { for k, v in var.backends : k => v if v.manage_health_check } : {}
+  for_each = local.is_internal ? {
+    for k, v in var.backends : k => v if v.manage_health_check && !v.is_serverless_neg
+  } : {}
 
   project             = var.project_id
   region              = var.region
@@ -164,6 +167,7 @@ locals {
       try(google_compute_health_check.this[k].id, null),
       try(google_compute_region_health_check.this[k].id, null)
     )
+    if !v.is_serverless_neg
   }
 }
 
@@ -291,8 +295,56 @@ resource "google_compute_backend_bucket" "this" {
   }
 }
 
+resource "google_compute_backend_service" "serverless" {
+  for_each = local.is_external ? { for k, v in var.backends : k => v if v.is_serverless_neg } : {}
+
+  project     = var.project_id
+  name        = "${var.name}-${each.key}-backend"
+  description = each.value.description
+  protocol    = each.value.protocol
+  port_name   = each.value.port_name
+  timeout_sec = each.value.timeout_sec
+
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  security_policy       = var.enable_cloud_armor ? google_compute_security_policy.this[0].id : null
+
+  enable_cdn = each.value.enable_cdn
+
+  dynamic "cdn_policy" {
+    for_each = each.value.enable_cdn ? [1] : []
+    content {
+      cache_mode        = "CACHE_ALL_STATIC"
+      default_ttl       = 3600
+      client_ttl        = 3600
+      max_ttl           = 86400
+      negative_caching  = true
+      serve_while_stale = 86400
+    }
+  }
+
+  dynamic "backend" {
+    for_each = each.value.groups
+    content {
+      group           = backend.value.group
+      balancing_mode  = backend.value.balancing_mode
+      capacity_scaler = backend.value.capacity_scaler
+      max_utilization = backend.value.balancing_mode == "UTILIZATION" ? backend.value.max_utilization : null
+    }
+  }
+
+  dynamic "log_config" {
+    for_each = var.enable_logging ? [1] : []
+    content {
+      enable      = true
+      sample_rate = each.value.log_sample_rate
+    }
+  }
+  # NOTE: health_checks intentionally omitted — not allowed for Serverless NEG backends
+}
+
+
 resource "google_compute_backend_service" "this" {
-  for_each = local.is_external ? var.backends : {}
+  for_each = local.is_external ? { for k, v in var.backends : k => v if !v.is_serverless_neg } : {}
 
   project     = var.project_id
   name        = "${var.name}-${each.key}-backend"
@@ -303,7 +355,7 @@ resource "google_compute_backend_service" "this" {
 
   load_balancing_scheme = "EXTERNAL_MANAGED"
   health_checks          = [local.health_check_ids[each.key]]
-  security_policy        = var.enable_cloud_armor ? google_compute_security_policy.this[0].id : null
+  security_policy       = var.enable_cloud_armor ? google_compute_security_policy.this[0].id : null
 
   enable_cdn = each.value.enable_cdn
 
@@ -341,8 +393,8 @@ resource "google_compute_backend_service" "this" {
 # Regional backend service for INTERNAL_MANAGED (internal HTTP(S) LB).
 # Note: enable_cdn / cdn_policy / security_policy are deliberately omitted —
 # neither Cloud CDN nor this module's Cloud Armor policy applies to internal LBs.
-resource "google_compute_region_backend_service" "this" {
-  for_each = local.is_internal ? var.backends : {}
+resource "google_compute_region_backend_service" "serverless" {
+  for_each = local.is_internal ? { for k, v in var.backends : k => v if v.is_serverless_neg } : {}
 
   project     = var.project_id
   region      = var.region
@@ -353,7 +405,39 @@ resource "google_compute_region_backend_service" "this" {
   timeout_sec = each.value.timeout_sec
 
   load_balancing_scheme = "INTERNAL_MANAGED"
-  health_checks          = [local.health_check_ids[each.key]]
+
+  dynamic "backend" {
+    for_each = each.value.groups
+    content {
+      group           = backend.value.group
+      balancing_mode  = backend.value.balancing_mode
+      capacity_scaler = backend.value.capacity_scaler
+      max_utilization = backend.value.balancing_mode == "UTILIZATION" ? backend.value.max_utilization : null
+    }
+  }
+
+  dynamic "log_config" {
+    for_each = var.enable_logging ? [1] : []
+    content {
+      enable      = true
+      sample_rate = each.value.log_sample_rate
+    }
+  }
+}
+
+resource "google_compute_region_backend_service" "this" {
+  for_each = local.is_internal ? { for k, v in var.backends : k => v if !v.is_serverless_neg } : {}
+
+  project     = var.project_id
+  region      = var.region
+  name        = "${var.name}-${each.key}-backend"
+  description = each.value.description
+  protocol    = each.value.protocol
+  port_name   = each.value.port_name
+  timeout_sec = each.value.timeout_sec
+
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  health_checks         = each.value.is_serverless_neg ? [] : [local.health_check_ids[each.key]]
 
   dynamic "backend" {
     for_each = each.value.groups
@@ -382,15 +466,15 @@ locals {
   # a given routing key is a backend_service or a backend_bucket.
   backend_meta = merge(
     { for k, v in var.backends : k => {
-        is_default    = v.is_default
-        host_patterns = v.host_patterns
-        path_patterns = v.path_patterns
+      is_default    = v.is_default
+      host_patterns = v.host_patterns
+      path_patterns = v.path_patterns
       }
     },
     { for k, v in var.backend_buckets : k => {
-        is_default    = v.is_default
-        host_patterns = v.host_patterns
-        path_patterns = v.path_patterns
+      is_default    = v.is_default
+      host_patterns = v.host_patterns
+      path_patterns = v.path_patterns
       }
     }
   )
@@ -399,7 +483,9 @@ locals {
   # it's backed by google_compute_backend_service or google_compute_backend_bucket.
   service_ids = merge(
     { for k, v in google_compute_backend_service.this : k => v.id },
+    { for k, v in google_compute_backend_service.serverless : k => v.id },
     { for k, v in google_compute_region_backend_service.this : k => v.id },
+    { for k, v in google_compute_region_backend_service.serverless : k => v.id },
     { for k, v in google_compute_backend_bucket.this : k => v.id }
   )
 
@@ -492,9 +578,9 @@ resource "google_compute_url_map" "https_redirect" {
   name    = "${var.name}-https-redirect"
 
   default_url_redirect {
-    https_redirect          = true
-    redirect_response_code  = "MOVED_PERMANENTLY_DEFAULT"
-    strip_query              = false
+    https_redirect         = true
+    redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
+    strip_query            = false
   }
 }
 
@@ -506,9 +592,9 @@ resource "google_compute_region_url_map" "https_redirect" {
   name    = "${var.name}-https-redirect"
 
   default_url_redirect {
-    https_redirect          = true
-    redirect_response_code  = "MOVED_PERMANENTLY_DEFAULT"
-    strip_query              = false
+    https_redirect         = true
+    redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
+    strip_query            = false
   }
 }
 
@@ -543,29 +629,29 @@ resource "google_compute_region_target_http_proxy" "this" {
 resource "google_compute_global_forwarding_rule" "http" {
   count = local.is_external && var.enable_http ? 1 : 0
 
-  project                = var.project_id
-  name                   = "${var.name}-http-fr"
-  target                 = google_compute_target_http_proxy.this[0].id
-  port_range             = "80"
-  ip_address              = local.lb_ipv4_address
-  load_balancing_scheme  = "EXTERNAL_MANAGED"
-  labels                 = var.labels
+  project               = var.project_id
+  name                  = "${var.name}-http-fr"
+  target                = google_compute_target_http_proxy.this[0].id
+  port_range            = "80"
+  ip_address            = local.lb_ipv4_address
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  labels                = var.labels
 }
 
 resource "google_compute_forwarding_rule" "http" {
   count = local.is_internal && var.enable_http ? 1 : 0
 
-  project                = var.project_id
-  region                  = var.region
-  name                    = "${var.name}-http-fr"
-  network                 = var.network
-  subnetwork              = var.subnetwork
-  target                   = google_compute_region_target_http_proxy.this[0].id
-  port_range               = "80"
-  ip_address               = local.lb_ipv4_address
-  load_balancing_scheme   = "INTERNAL_MANAGED"
-  allow_global_access      = var.allow_global_access
-  labels                   = var.labels
+  project               = var.project_id
+  region                = var.region
+  name                  = "${var.name}-http-fr"
+  network               = var.network
+  subnetwork            = var.subnetwork
+  target                = google_compute_region_target_http_proxy.this[0].id
+  port_range            = "80"
+  ip_address            = local.lb_ipv4_address
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  allow_global_access   = var.allow_global_access
+  labels                = var.labels
 }
 
 ############################################
@@ -619,62 +705,62 @@ locals {
 resource "google_compute_target_https_proxy" "this" {
   count = local.is_external && var.enable_ssl ? 1 : 0
 
-  project           = var.project_id
-  name              = "${var.name}-https-proxy"
-  url_map           = local.url_map_id
-  ssl_certificates  = local.ssl_certificate_ids
-  ssl_policy        = local.ssl_policy_id
+  project          = var.project_id
+  name             = "${var.name}-https-proxy"
+  url_map          = local.url_map_id
+  ssl_certificates = local.ssl_certificate_ids
+  ssl_policy       = local.ssl_policy_id
 }
 
 resource "google_compute_region_target_https_proxy" "this" {
   count = local.is_internal && var.enable_ssl ? 1 : 0
 
-  project           = var.project_id
-  region            = var.region
-  name              = "${var.name}-https-proxy"
-  url_map           = local.url_map_id
-  ssl_certificates  = local.ssl_certificate_ids
-  ssl_policy        = local.ssl_policy_id
+  project          = var.project_id
+  region           = var.region
+  name             = "${var.name}-https-proxy"
+  url_map          = local.url_map_id
+  ssl_certificates = local.ssl_certificate_ids
+  ssl_policy       = local.ssl_policy_id
 }
 
 resource "google_compute_global_forwarding_rule" "https" {
   count = local.is_external && var.enable_ssl ? 1 : 0
 
-  project                = var.project_id
-  name                   = "${var.name}-https-fr"
-  target                 = google_compute_target_https_proxy.this[0].id
-  port_range             = "443"
-  ip_address              = local.lb_ipv4_address
-  load_balancing_scheme  = "EXTERNAL_MANAGED"
-  labels                 = var.labels
+  project               = var.project_id
+  name                  = "${var.name}-https-fr"
+  target                = google_compute_target_https_proxy.this[0].id
+  port_range            = "443"
+  ip_address            = local.lb_ipv4_address
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  labels                = var.labels
 }
 
 resource "google_compute_global_forwarding_rule" "https_ipv6" {
   count = local.is_external && var.enable_ssl && var.enable_ipv6 ? 1 : 0
 
-  project                = var.project_id
-  name                   = "${var.name}-https-fr-ipv6"
-  target                 = google_compute_target_https_proxy.this[0].id
-  port_range             = "443"
-  ip_address              = var.create_static_ip ? google_compute_global_address.ipv6[0].address : null
-  load_balancing_scheme  = "EXTERNAL_MANAGED"
-  labels                 = var.labels
+  project               = var.project_id
+  name                  = "${var.name}-https-fr-ipv6"
+  target                = google_compute_target_https_proxy.this[0].id
+  port_range            = "443"
+  ip_address            = var.create_static_ip ? google_compute_global_address.ipv6[0].address : null
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  labels                = var.labels
 }
 
 resource "google_compute_forwarding_rule" "https" {
   count = local.is_internal && var.enable_ssl ? 1 : 0
 
-  project                = var.project_id
-  region                  = var.region
-  name                    = "${var.name}-https-fr"
-  network                 = var.network
-  subnetwork              = var.subnetwork
-  target                   = google_compute_region_target_https_proxy.this[0].id
-  port_range               = "443"
-  ip_address               = local.lb_ipv4_address
-  load_balancing_scheme   = "INTERNAL_MANAGED"
-  allow_global_access      = var.allow_global_access
-  labels                   = var.labels
+  project               = var.project_id
+  region                = var.region
+  name                  = "${var.name}-https-fr"
+  network               = var.network
+  subnetwork            = var.subnetwork
+  target                = google_compute_region_target_https_proxy.this[0].id
+  port_range            = "443"
+  ip_address            = local.lb_ipv4_address
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  allow_global_access   = var.allow_global_access
+  labels                = var.labels
 }
 
 ############################################
