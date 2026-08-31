@@ -91,6 +91,7 @@ module "lb" {
   backend_buckets = {
     website = {
       is_default  = true
+      enable_cdn  = true
       bucket_name = module.website_bucket.bucket_name
     }
   }
