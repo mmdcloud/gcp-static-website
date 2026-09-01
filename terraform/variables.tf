@@ -20,11 +20,6 @@ variable "environment" {
   }
 }
 
-variable "domain" {
-  description = "Custom domain name (e.g. example.com). Used for the SSL certificate."
-  type        = string
-}
-
 variable "bucket_name_prefix" {
   description = "Prefix for the GCS bucket name. Full name becomes '<prefix>-<environment>-website'."
   type        = string
