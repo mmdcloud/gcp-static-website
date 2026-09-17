@@ -21,6 +21,7 @@ data "external" "mime_type" {
 # -------------------------------------------------------------------------------
 module "website_bucket" {
   source        = "./modules/gcs"
+  project_id    = var.project_id
   location      = var.region
   name          = local.bucket_name
   storage_class = "STANDARD"
