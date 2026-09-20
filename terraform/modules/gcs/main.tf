@@ -1,8 +1,4 @@
 locals {
-  # Single-bucket module: wrap the bucket name in a one-element set so the
-  # IAM `for_each` blocks below have a stable, unique key to iterate over.
-  # (Kept as a set/map pattern rather than a bare bool so this can be
-  # extended to multiple bucket names later without reshaping the IAM blocks.)
   names_set = toset([var.name])
 }
 

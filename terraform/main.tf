@@ -103,3 +103,23 @@ module "lb" {
   enable_cloud_armor      = false
   depends_on              = [module.website_bucket]
 }
+
+# --------------------------------------------------------------------------
+# DNS Configuration
+# --------------------------------------------------------------------------
+module "dns" {
+  source     = "./modules/cloud-dns"
+  name       = "mohitd.xyz"
+  domain     = "mohitd.xyz."
+  project_id = var.project_id
+  type       = "public"
+
+  recordsets = [
+    {
+      name    = "website.mohitd.xyz"
+      type    = "A"
+      ttl     = 500
+      records = [module.lb.lb_ip_address]
+    }
+  ]
+}
