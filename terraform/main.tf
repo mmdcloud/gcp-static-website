@@ -8,6 +8,10 @@ locals {
 
 data "google_project" "current" {}
 
+data "google_dns_managed_zone" "zone" {
+  name = "mohitd"
+}
+
 # -------------------------------------------------------------------------------
 # MIME type resolution (one call per source file)
 # -------------------------------------------------------------------------------
@@ -107,19 +111,12 @@ module "lb" {
 # --------------------------------------------------------------------------
 # DNS Configuration
 # --------------------------------------------------------------------------
-module "dns" {
-  source     = "./modules/cloud-dns"
-  name       = "mohitd.xyz"
-  domain     = "mohitd.xyz."
-  project_id = var.project_id
-  type       = "public"
+resource "google_dns_record_set" "dns" {
+  name = "website.${data.google_dns_managed_zone.zone.dns_name}"
+  type = "A"
+  ttl  = 300
 
-  recordsets = [
-    {
-      name    = "website.mohitd.xyz"
-      type    = "A"
-      ttl     = 500
-      records = [module.lb.lb_ip_address]
-    }
-  ]
+  managed_zone = data.google_dns_managed_zone.zone.name
+
+  rrdatas = [module.lb.lb_ip_address]
 }
