@@ -101,9 +101,11 @@ module "lb" {
     }
   }
 
-  enable_ssl              = false
+  enable_ssl              = true
   enable_http             = true
-  managed_ssl_certificate = false
+  domains                 = ["website.mohitd.xyz"]
+  https_redirect          = false # Change it to true once the ssl certificate becomes AVAILABLE
+  managed_ssl_certificate = true
   enable_cloud_armor      = false
   depends_on              = [module.website_bucket]
 }
